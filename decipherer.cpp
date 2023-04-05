@@ -5,11 +5,11 @@
 //|
 //| To compile, type:
 //|
-//|     g++ -o ./decipherer.app ./decipherer.cpp
+//|     g++ -o ./a.out ./decipherer.cpp
 //|
 //| To run, type:
 //|
-//|     ./decipherer.app
+//|     ./a.out
 
 
 #include <cstdio>
@@ -21,54 +21,44 @@
 namespace mcmc {
 
 
-#define URAND()    ((double)(rand()) / (double)(RAND_MAX))
+inline double urand() {
+	// Pick a number from Unif((0, 1)):
+	return ((double)(rand()) / (double)(RAND_MAX));
+}
 
 
-// The bigram language model. So far it only supports ascii/latin-1 encoding.
-struct LanguageModel {
-	int symbol_count;
+// The bigram language model. So far it only supports latin-1/ascii charset (and encoding).
+struct BigramLanguageModel {
 	int frequency_matrix[256][256];
-	int freq_of_symbol[256];
 
-	LanguageModel(FILE *corpus_file);
+	BigramLanguageModel(FILE *corpus_file);
 	double compute_log_score_of(char *text, int len);
 };
 
 
-LanguageModel::LanguageModel(FILE *corpus_file) {
+BigramLanguageModel::BigramLanguageModel(FILE *corpus_file) {
 	int i;
 	int j;
 	char currch; // current symbol
 	char nextch; // next symbol 
-	memset((void *)(this->freq_of_symbol), 0, 256 * sizeof(int));
 	memset((void *)(this->frequency_matrix), 0, 256 * 256 * sizeof(int));
 	// Read file:
-	do {
-		currch = fgetc(corpus_file);  // TODO Batch the call.
-		if (currch == EOF) { // Empty file:
-			break;  // goto count_symbol;
+	currch = fgetc(corpus_file);
+	if (currch == EOF) { // Empty file:
+		return;
+	}
+	for (;;) {
+		nextch = fgetc(corpus_file);
+		if (nextch == EOF) {
+			return;
 		}
-		this->freq_of_symbol[currch] = 1;
-		for (;;) {
-			nextch = fgetc(corpus_file);
-			if (nextch == EOF) {
-				break;  // goto count_symbol;
-			}
-			this->freq_of_symbol[nextch] += 1;
-			this->frequency_matrix[currch][nextch] += 1;
-			currch = nextch;
-		}
-	} while (0);
-	// count_symbol:
-	for (i = 0; i < 256; i++) {
-		if (this->freq_of_symbol[i] != 0) {
-			this->symbol_count += 1;
-		}
+		this->frequency_matrix[currch][nextch] += 1;
+		currch = nextch;
 	}
 }
 
 
-double LanguageModel::compute_log_score_of(
+double BigramLanguageModel::compute_log_score_of(
 	char *text,
 	int   len
 ) {
@@ -106,7 +96,6 @@ struct PermutationMap {
 PermutationMap::PermutationMap() {
 	int i;
 	const int N = 256;
-	printf("Per::Per(): N: %d\n", N);
 	for (i = 0; i < N; i++) {
 		this->m[i] = (char)i;
 	}
@@ -123,9 +112,12 @@ void PermutationMap::copy_from(PermutationMap *src) {
 
 
 void PermutationMap::swap_two_letters_at_random() {
-	int selection = URAND() * 52 * 51;
+	int selection = urand() * 52 * 51;
 	int first_letter = selection / 52;
-	int second_letter = selection % 52;
+	int second_letter = selection % 51;
+	if (second_letter >= first_letter) {
+		second_letter += 1;
+	}
 	int first_letter_index = (
 		(first_letter < 26) ? (
 			// uppercase:
@@ -162,7 +154,7 @@ void PermutationMap::scramble() {
 	// Suffle the `letters` array:
 	for (i = 0; i < 52; i++) {
 		for (j = 0; j < 52; j++) {
-			if (URAND() > 0.5) {
+			if (urand() > 0.5) {
 				// Swap:
 				tmp = letters[i];
 				letters[i] = letters[j];
@@ -194,7 +186,7 @@ void PermutationMap::apply_inplace(char *buf, int len) {
 
 void scramble_text_inplace(
 	char *plain_text_buffer,
-	int len
+	int   len
 ) {
 	PermutationMap pm;
 	pm.scramble();
@@ -203,18 +195,15 @@ void scramble_text_inplace(
 
 
 void decipher(
-	LanguageModel *language_model,
-	char          *scrambled_text,
-	int            scrambled_text_length,
-	int            iterations
+	BigramLanguageModel *language_model,
+	char                *scrambled_text,
+	int                  scrambled_text_length,
+	char                *result_buffer,
+	int                  iterations
 ) {
 	PermutationMap current_map;  // Init with identity map.
 	PermutationMap proposed_map;
-	char *proposed_text = (char *)calloc(scrambled_text_length, sizeof(char));
-	if (proposed_text == NULL) {
-		printf("ERROR: cannot allocate buffer.\n");
-		return;
-	}
+	char *proposed_text = result_buffer;
 	double current_log_score = language_model->compute_log_score_of(scrambled_text, scrambled_text_length);
 	double proposed_log_score = 0.0;
 	int it_count = 0;
@@ -227,51 +216,42 @@ void decipher(
 		proposed_log_score = language_model->compute_log_score_of(proposed_text, scrambled_text_length);
 		should_accept = (
 			(proposed_log_score > current_log_score) ? true : (
-				log(URAND()) <= (proposed_log_score - current_log_score)
+				log(urand()) <= (proposed_log_score - current_log_score)
 			)
 		);
 		if (should_accept) {
 			current_map.copy_from(&proposed_map);
 			current_log_score = proposed_log_score;
 			ac_count += 1;
-			printf("decipher(): accepted! ac / it: [%d / %d]\n", ac_count, it_count);
-			printf("decipher(): score: %f\n", proposed_log_score);
-			printf("decipher(): current text: %s\n", proposed_text);
+			//printf("decipher(): accepted! ac / it: [%d / %d]\n", ac_count, it_count);
+			//printf("decipher(): score: %f\n", proposed_log_score);
+			//printf("decipher(): current text: %s\n", proposed_text);
 		}
 	}
-	free(proposed_text);
 	return;
 }
 
 } // namespace mcmc
 
 
-const char CORPUS_FILE_PATH[] = "./data/warpeace_input.txt";
+const char ENGLISH_CORPUS_FILE_PATH[] = "./data/warpeace_input.txt";
 
 
 int main() {
-	const char text[] = (
-		"I dont prefer a coding oriented project. "
-		"I prefer the project can be based on the "
-		"knowledge learned in this class. I would "
-		"rather read new material and summarize it "
-		"than solve a problem on my own. Besides, "
-		"the format of the project I prefer to write "
-		"a report instead of a presentation. "
-		"For this class, I hope to explain more example "
-		"questions in detail in the lecture to facilitate "
-		"the understanding and application of concepts "
-		"and theories, and questions in quiz are also "
-		"needed to be explained."
+	char text[] = (
+		"I arrive now at the ineffable core of my story. And here begins my despair as a writer. All language is a set of symbols whose use among its speakers assumes a shared past. How, then, can I translate into words the limitless Aleph, which my floundering mind can scarcely encompass?"
 	);
-	FILE *corpus_file = fopen(CORPUS_FILE_PATH, "r");
-	if (corpus_file == NULL) {
-		printf("ERROR: cannot open the corpus file: %s\n", CORPUS_FILE_PATH);
+	const int textlen = strlen(text);
+	char result_buffer[sizeof(text)] = {0};
+	FILE *english_corpus_file = fopen(ENGLISH_CORPUS_FILE_PATH, "r");
+	if (english_corpus_file == NULL) {
+		printf("ERROR: cannot open the corpus file: %s\n", ENGLISH_CORPUS_FILE_PATH);
 	}
-	mcmc::LanguageModel english_model(corpus_file);
-	printf("Original text: %s\n", text);
-	mcmc::scramble_text_inplace((char *)text, strlen(text));
-	printf("Scrambled text: %s\n", text);
-	mcmc::decipher(&english_model, (char *)text, strlen(text), 30000);
+	mcmc::BigramLanguageModel english_model(english_corpus_file);
+	printf("Original text: %s\n\n", text);
+	mcmc::scramble_text_inplace((char *)text, textlen);
+	printf("Scrambled text: %s\n\n", text);
+	mcmc::decipher(&english_model, (char *)text, textlen, result_buffer, 30000);
+	printf("Final result: %s\n\n", result_buffer);
 	return 0;
 }
